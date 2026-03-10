@@ -16,9 +16,15 @@ A full-stack fitness tracking web application built with **Next.js 16**, **TypeS
 - **Goals** — Full CRUD: create, edit, delete, mark complete; 6 goal types (weight loss, muscle gain, cardio, flexibility, nutrition, custom)
 - **Workouts** — Log exercises with sets / reps / weight / duration / calories, optionally linked to a goal
 - **Progress** — Line/bar chart history per goal, progress logging with notes
+- **BMI Tracker** — Log weight, height and body fat; automatic BMI calculation with category classification; time-series chart
+- **Personal Bests** — Automatically aggregated all-time records (max weight, reps, duration) per exercise
+- **CSV Export** — Download your workouts, goals, progress entries, or body stats as a `.csv` file from the dashboard
+- **Toast Notifications** — Success and error feedback on every action via Sonner
 - **User Profile** — Avatar dropdown with profile modal and sign-out
 - **Dark / Light mode** — Theme toggle, respects system preference
 - **Mobile-first** — Responsive layout with sidebar on desktop, sheet navigation on mobile
+- **Loading skeletons** — Route-level loading states for every page
+- **Error boundaries** — Route-level error pages with retry buttons
 
 ---
 
@@ -30,13 +36,17 @@ A full-stack fitness tracking web application built with **Next.js 16**, **TypeS
 | Language | TypeScript 5 (strict mode) |
 | Styling | Tailwind CSS v4 + CSS custom properties |
 | UI Components | shadcn/ui (Radix UI primitives) |
-| Charts | Recharts |
+| Charts | Recharts (dynamically imported) |
 | Auth | NextAuth.js v5 beta (JWT sessions) |
 | ORM | Prisma v7 (client engine + driver adapter) |
 | Database | PostgreSQL 16 |
 | DB Driver | `@prisma/adapter-pg` + `pg` |
+| HTTP Client | Axios (with interceptors for auto-error toasts) |
+| Server State | TanStack Query v5 (React Query) |
 | Forms | React Hook Form v7 + `standardSchemaResolver` |
 | Validation | Zod v4 |
+| Toasts | Sonner |
+| CSV Export | PapaParse |
 | Deployment | Vercel (app) + Railway or Supabase (DB) |
 
 ---
@@ -64,7 +74,7 @@ psql --version
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/fittrack.git
+git clone https://github.com/JScoder4005/fittrack.git
 cd fittrack
 ```
 
@@ -121,10 +131,11 @@ openssl rand -base64 32
 ### 5. Run database migrations
 
 ```bash
+# Run all migrations (creates all tables including body_stats)
 npx prisma migrate dev --name init
 ```
 
-This creates all tables in your `fittrack` database.
+This creates all tables in your `fittrack` database including the new `body_stats` table.
 
 ### 6. (Optional) Seed demo data
 
@@ -200,6 +211,7 @@ Located at `prisma/schema.prisma`. Key models:
 | `Goal` | `goals` | Fitness goals with type, status, target/current value |
 | `WorkoutLog` | `workout_logs` | Individual exercise logs linked to optional goal |
 | `ProgressEntry` | `progress_entries` | Time-series progress snapshots for a goal |
+| `BodyStat` | `body_stats` | Weight, height, body fat % entries for BMI tracking |
 
 ### Goal Types (enum)
 
@@ -255,6 +267,11 @@ SELECT id, name, email, "createdAt" FROM users;
 **Inspect goals:**
 ```sql
 SELECT title, type, status, "currentValue", "targetValue", unit FROM goals;
+```
+
+**Inspect body stats:**
+```sql
+SELECT weight, height, "bodyFat", "recordedAt" FROM body_stats ORDER BY "recordedAt" DESC;
 ```
 
 ### Connection String Format
@@ -330,71 +347,110 @@ Restart the dev server — the **"Continue with Google"** button will now work.
 ```
 fittrack/
 ├── prisma/
-│   ├── schema.prisma          # Database models and enums
-│   ├── seed.ts                # Demo data seeder
-│   └── migrations/            # SQL migration history
-├── prisma.config.ts           # Prisma v7 datasource config (CLI)
+│   ├── schema.prisma              # Database models and enums (incl. BodyStat)
+│   ├── seed.ts                    # Demo data seeder
+│   └── migrations/                # SQL migration history
+├── prisma.config.ts               # Prisma v7 datasource config (CLI)
 ├── src/
+│   ├── types/
+│   │   └── index.ts               # Centralized TypeScript interfaces
+│   ├── hooks/                     # TanStack Query custom hooks
+│   │   ├── use-goals.ts           # useGoals, useCreateGoal, useUpdateGoal, useDeleteGoal
+│   │   ├── use-workouts.ts        # useWorkouts, useCreateWorkout, useDeleteWorkout
+│   │   ├── use-progress.ts        # useLogProgress
+│   │   ├── use-dashboard.ts       # useDashboard
+│   │   ├── use-body-stats.ts      # useBodyStats, useCreateBodyStat, useDeleteBodyStat
+│   │   └── use-personal-bests.ts  # usePersonalBests
 │   ├── app/
 │   │   ├── (auth)/
 │   │   │   ├── login/
-│   │   │   │   └── page.tsx   # Login page (email + Google)
+│   │   │   │   └── page.tsx       # Login page (email + Google, Suspense boundary)
 │   │   │   └── register/
-│   │   │       └── page.tsx   # Registration page
+│   │   │       └── page.tsx       # Registration page
 │   │   ├── (dashboard)/
-│   │   │   ├── layout.tsx     # Sidebar + header + auth guard
+│   │   │   ├── layout.tsx         # Sidebar + header + auth guard
 │   │   │   ├── dashboard/
-│   │   │   │   └── page.tsx   # Stats overview + charts
+│   │   │   │   ├── page.tsx       # Stats overview + charts
+│   │   │   │   ├── loading.tsx    # Skeleton loading state
+│   │   │   │   └── error.tsx      # Error boundary
 │   │   │   ├── goals/
-│   │   │   │   ├── page.tsx   # Goals list
+│   │   │   │   ├── page.tsx       # Goals list
+│   │   │   │   ├── loading.tsx
+│   │   │   │   ├── error.tsx
 │   │   │   │   └── [id]/
-│   │   │   │       └── page.tsx   # Goal detail + progress chart
+│   │   │   │       ├── page.tsx   # Goal detail + progress chart
+│   │   │   │       ├── loading.tsx
+│   │   │   │       └── error.tsx
 │   │   │   ├── workouts/
-│   │   │   │   └── page.tsx   # Workout log
-│   │   │   └── progress/
-│   │   │       └── page.tsx   # Progress charts
-│   │   ├── api/
-│   │   │   ├── auth/
-│   │   │   │   └── [...nextauth]/
-│   │   │   │       └── route.ts   # NextAuth handler
-│   │   │   ├── register/
-│   │   │   │   └── route.ts   # POST /api/register
-│   │   │   ├── goals/
-│   │   │   │   ├── route.ts   # GET, POST /api/goals
-│   │   │   │   └── [id]/
-│   │   │   │       └── route.ts   # GET, PATCH, DELETE /api/goals/:id
-│   │   │   ├── workouts/
-│   │   │   │   ├── route.ts   # GET, POST /api/workouts
-│   │   │   │   └── [id]/
-│   │   │   │       └── route.ts   # PATCH, DELETE /api/workouts/:id
+│   │   │   │   ├── page.tsx       # Workout log table
+│   │   │   │   ├── loading.tsx
+│   │   │   │   └── error.tsx
 │   │   │   ├── progress/
-│   │   │   │   └── route.ts   # POST /api/progress
-│   │   │   └── dashboard/
-│   │   │       └── route.ts   # GET /api/dashboard (aggregated stats)
-│   │   ├── globals.css        # Tailwind + CSS variables (theming)
-│   │   └── layout.tsx         # Root layout + ThemeProvider
+│   │   │   │   ├── page.tsx       # Progress charts
+│   │   │   │   ├── loading.tsx
+│   │   │   │   └── error.tsx
+│   │   │   ├── bmi/               # ← NEW
+│   │   │   │   ├── page.tsx       # BMI + body stats tracker
+│   │   │   │   ├── loading.tsx
+│   │   │   │   └── error.tsx
+│   │   │   └── personal-bests/    # ← NEW
+│   │   │       ├── page.tsx       # Personal bests table
+│   │   │       ├── loading.tsx
+│   │   │       └── error.tsx
+│   │   ├── api/
+│   │   │   ├── auth/[...nextauth]/route.ts
+│   │   │   ├── register/route.ts
+│   │   │   ├── goals/
+│   │   │   │   ├── route.ts       # GET, POST /api/goals
+│   │   │   │   └── [id]/route.ts  # GET, PATCH, DELETE /api/goals/:id
+│   │   │   ├── workouts/
+│   │   │   │   ├── route.ts       # GET, POST /api/workouts
+│   │   │   │   ├── [id]/route.ts  # PATCH, DELETE /api/workouts/:id
+│   │   │   │   └── personal-bests/route.ts  # ← NEW GET /api/workouts/personal-bests
+│   │   │   ├── progress/route.ts  # GET, POST /api/progress
+│   │   │   ├── dashboard/route.ts # GET /api/dashboard
+│   │   │   ├── body-stats/        # ← NEW
+│   │   │   │   ├── route.ts       # GET, POST /api/body-stats
+│   │   │   │   └── [id]/route.ts  # DELETE /api/body-stats/:id
+│   │   │   └── export/route.ts    # ← NEW GET /api/export?type=...
+│   │   ├── globals.css
+│   │   └── layout.tsx             # Root layout + ThemeProvider + Providers
 │   ├── components/
-│   │   ├── ui/                # shadcn/ui components (Button, Card, etc.)
+│   │   ├── providers.tsx          # ← NEW QueryClientProvider + Toaster
+│   │   ├── ui/                    # shadcn/ui + custom primitives
+│   │   │   ├── stat-card.tsx      # ← NEW Reusable stat card
+│   │   │   ├── goal-progress-card.tsx  # ← NEW Reusable goal progress bar card
+│   │   │   ├── empty-state.tsx    # ← NEW Reusable empty state
+│   │   │   ├── delete-confirm-dialog.tsx  # ← NEW Reusable delete confirmation
+│   │   │   ├── chart-tooltip.tsx  # ← NEW Shared Recharts tooltip style
+│   │   │   ├── skeleton-card.tsx  # ← NEW Skeleton loading variants
+│   │   │   └── skeleton.tsx       # shadcn/ui skeleton primitive
 │   │   └── shared/
-│   │       ├── sidebar.tsx         # Desktop navigation sidebar
-│   │       ├── mobile-nav.tsx      # Mobile sheet navigation
-│   │       ├── user-menu.tsx       # Avatar dropdown + profile dialog
-│   │       ├── theme-toggle.tsx    # Light/dark mode toggle
-│   │       ├── dashboard-client.tsx
-│   │       ├── goals-client.tsx
+│   │       ├── sidebar.tsx        # Navigation (incl. BMI + Personal Bests links)
+│   │       ├── mobile-nav.tsx
+│   │       ├── user-menu.tsx
+│   │       ├── theme-toggle.tsx
+│   │       ├── theme-provider.tsx
+│   │       ├── dashboard-client.tsx   # Refactored — dynamic Recharts + ExportMenu
+│   │       ├── goals-client.tsx       # Refactored — mutation hooks
 │   │       ├── goal-form.tsx
-│   │       ├── goal-detail-client.tsx
-│   │       ├── workouts-client.tsx
-│   │       └── progress-client.tsx
-│   ├── lib/
-│   │   ├── auth.config.ts     # Edge-safe NextAuth config (used in proxy.ts)
-│   │   ├── auth.ts            # Full NextAuth config (Node.js, Prisma, bcrypt)
-│   │   ├── db.ts              # Prisma client singleton (PrismaPg adapter)
-│   │   └── utils.ts           # cn(), formatDate(), constants
-│   └── proxy.ts               # Route protection middleware (Next.js 16)
-├── .env.example               # Environment variable template
-├── .env.local                 # Your local secrets (gitignored)
-├── components.json            # shadcn/ui config
+│   │       ├── goal-detail-client.tsx # Refactored — useLogProgress hook
+│   │       ├── workouts-client.tsx    # Refactored — mutation hooks + StatCard
+│   │       ├── progress-client.tsx    # Refactored — dynamic Recharts
+│   │       ├── bmi-client.tsx         # ← NEW BMI tracker component
+│   │       ├── personal-bests.tsx     # ← NEW Personal bests table component
+│   │       └── export-menu.tsx        # ← NEW CSV export dropdown
+│   └── lib/
+│       ├── auth.config.ts         # Edge-safe NextAuth config
+│       ├── auth.ts                # Full NextAuth config (Node.js, Prisma, bcrypt)
+│       ├── db.ts                  # Prisma client singleton (PrismaPg adapter)
+│       ├── api.ts                 # ← NEW Axios instance with error interceptor
+│       ├── query-client.ts        # ← NEW TanStack QueryClient singleton
+│       ├── export.ts              # ← NEW PapaParse CSV download utility
+│       └── utils.ts               # cn(), formatDate(), constants
+├── .env.example
+├── .env.local                     # Your local secrets (gitignored)
+├── components.json
 ├── next.config.ts
 ├── tailwind.config.ts
 ├── tsconfig.json
@@ -435,18 +491,90 @@ All API routes require authentication (JWT session cookie) except `/api/register
 | `POST` | `/api/workouts` | Log a new workout |
 | `PATCH` | `/api/workouts/:id` | Update a workout log |
 | `DELETE` | `/api/workouts/:id` | Delete a workout log |
+| `GET` | `/api/workouts/personal-bests` | All-time max weight/reps/duration per exercise |
 
 ### Progress
 
 | Method | Route | Description |
 |---|---|---|
+| `GET` | `/api/progress` | List progress entries (optionally `?goalId=`) |
 | `POST` | `/api/progress` | Log progress entry + updates `goal.currentValue` |
+
+### Body Stats (BMI)
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/api/body-stats` | List all body stat entries for current user |
+| `POST` | `/api/body-stats` | Log weight, height, body fat `{ weight, height?, bodyFat? }` |
+| `DELETE` | `/api/body-stats/:id` | Delete a body stat entry |
+
+### Export
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/api/export?type=workouts` | Download workouts as JSON (frontend converts to CSV) |
+| `GET` | `/api/export?type=goals` | Download goals data |
+| `GET` | `/api/export?type=progress` | Download progress entries |
+| `GET` | `/api/export?type=body-stats` | Download body stats with BMI calculated |
 
 ### Dashboard
 
 | Method | Route | Description |
 |---|---|---|
 | `GET` | `/api/dashboard` | Aggregated stats: goals, workouts this week, calories, streak, chart data |
+
+---
+
+## Data Flow Architecture
+
+```
+Server Component (page.tsx)
+  └── Fetches initial data from DB (Prisma)
+  └── Passes as props to Client Component
+
+Client Component (*-client.tsx)
+  └── Displays initial server data
+  └── Uses TanStack Query mutations for CRUD operations
+        └── useMutation → Axios → API Route → Prisma → PostgreSQL
+        └── onSuccess → toast.success() + router.refresh()
+  └── Axios interceptor → auto toast.error() on any API failure
+```
+
+### TanStack Query Hooks
+
+All mutations follow this pattern:
+
+```typescript
+const createGoal = useCreateGoal();
+await createGoal.mutateAsync(data);
+// → POST /api/goals via Axios
+// → toast.success("Goal created!")
+// → router.refresh() to re-fetch server data
+```
+
+### Axios Interceptor (auto error toasts)
+
+```typescript
+// src/lib/api.ts
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    toast.error(err.response?.data?.error || "Something went wrong");
+    return Promise.reject(err);
+  }
+);
+```
+
+### Dynamic Imports (Recharts)
+
+Charts are loaded lazily to reduce initial bundle size:
+
+```typescript
+const DynamicBarChart = dynamic(
+  () => import("recharts").then(m => { ... }),
+  { ssr: false, loading: () => <SkeletonChart /> }
+);
+```
 
 ---
 
@@ -475,6 +603,25 @@ src/lib/auth.ts          ← Full Node.js (Prisma + bcrypt)
 6. Subsequent requests: middleware reads JWT from cookie (Edge-safe)
 7. Server components call auth() from auth.ts to get session
 ```
+
+---
+
+## BMI Reference
+
+The BMI Tracker calculates BMI using the standard formula:
+
+```
+BMI = weight (kg) / height (m)²
+```
+
+| BMI Range | Category | Color |
+|---|---|---|
+| < 18.5 | Underweight | Blue |
+| 18.5 – 24.9 | Healthy | Green |
+| 25 – 29.9 | Overweight | Orange |
+| ≥ 30 | Obese | Red |
+
+BMI is only calculated when height is provided. You can log weight-only entries as well.
 
 ---
 
@@ -549,6 +696,12 @@ Middleware cannot import Prisma or bcrypt. The auth config is split into `auth.c
 
 ### Next.js 16 middleware
 The middleware file is named `proxy.ts` (not `middleware.ts`) per the Next.js 16 convention.
+
+### useSearchParams() requires Suspense
+Any component calling `useSearchParams()` must be wrapped in a `<Suspense>` boundary. This is already applied on the Login page.
+
+### Prisma generate after schema changes
+After modifying `prisma/schema.prisma`, run `npx prisma generate` to update the TypeScript types before building.
 
 ---
 

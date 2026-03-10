@@ -1,26 +1,68 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { TrendingUp, Target, Calendar } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar, Legend,
-} from "recharts";
-import { calculateProgress, formatDate, formatRelativeDate, GOAL_TYPE_LABELS, GOAL_TYPE_COLORS } from "@/lib/utils";
+import { StatCard } from "@/components/ui/stat-card";
+import { GoalProgressCard } from "@/components/ui/goal-progress-card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { chartTooltipStyle } from "@/components/ui/chart-tooltip";
+import { SkeletonChart } from "@/components/ui/skeleton-card";
+import { calculateProgress, formatRelativeDate } from "@/lib/utils";
+import type { GoalWithProgress, ProgressEntry } from "@/types";
 
-interface ProgressEntry {
-  id: string;
-  value: number;
-  notes: string | null;
-  recordedAt: string;
-}
+// Dynamic imports for Recharts charts
+const DynamicProgressChart = dynamic(
+  () => import("recharts").then((m) => {
+    const {
+      LineChart, Line, BarChart, Bar,
+      XAxis, YAxis, CartesianGrid, Tooltip,
+      ResponsiveContainer, Legend,
+    } = m;
 
-interface GoalWithProgress {
+    return function ProgressChart({
+      data,
+      chartType,
+      targetValue,
+    }: {
+      data: { date: string; value: number; target: number }[];
+      chartType: "line" | "bar";
+      targetValue: number;
+    }) {
+      if (data.length === 0) return null;
+      return (
+        <ResponsiveContainer width="100%" height={220}>
+          {chartType === "line" ? (
+            <LineChart data={data} margin={{ top: 5, right: 10, bottom: 5, left: -20 }}>
+              <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip contentStyle={chartTooltipStyle} />
+              <Legend wrapperStyle={{ fontSize: "11px" }} />
+              <Line type="monotone" dataKey="value" stroke="hsl(var(--chart-1))" strokeWidth={2} dot={{ r: 4 }} name="Progress" />
+              <Line type="monotone" dataKey="target" stroke="hsl(var(--chart-2))" strokeDasharray="4 4" strokeWidth={1.5} dot={false} name="Target" />
+            </LineChart>
+          ) : (
+            <BarChart data={data} margin={{ top: 5, right: 10, bottom: 5, left: -20 }}>
+              <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip contentStyle={chartTooltipStyle} />
+              <Bar dataKey="value" fill="hsl(var(--chart-1))" radius={[4, 4, 0, 0]} name="Progress" />
+            </BarChart>
+          )}
+        </ResponsiveContainer>
+      );
+    };
+  }),
+  { ssr: false, loading: () => <SkeletonChart /> }
+);
+
+interface GoalWithProgressEntry {
   id: string;
   title: string;
   type: string;
@@ -29,7 +71,7 @@ interface GoalWithProgress {
   targetValue: number;
   unit: string;
   deadline: string | null;
-  progressEntries: ProgressEntry[];
+  progressEntries: Array<{ id: string; value: number; notes: string | null; recordedAt: string }>;
   _count: { workoutLogs: number };
 }
 
@@ -45,7 +87,7 @@ export function ProgressClient({
   goals,
   recentEntries,
 }: {
-  goals: GoalWithProgress[];
+  goals: GoalWithProgressEntry[];
   recentEntries: RecentEntry[];
 }) {
   const [selectedGoalId, setSelectedGoalId] = useState(goals[0]?.id || "");
@@ -53,18 +95,27 @@ export function ProgressClient({
 
   const selectedGoal = goals.find((g) => g.id === selectedGoalId);
 
-  const chartData = selectedGoal?.progressEntries.map((e) => ({
-    date: new Date(e.recordedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-    value: e.value,
-    target: selectedGoal.targetValue,
-  })) || [];
+  const chartData =
+    selectedGoal?.progressEntries.map((e) => ({
+      date: new Date(e.recordedAt).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+      }),
+      value: e.value,
+      target: selectedGoal.targetValue,
+    })) || [];
 
   const activeGoals = goals.filter((g) => g.status === "ACTIVE");
   const completedGoals = goals.filter((g) => g.status === "COMPLETED");
 
   const overallStats = {
     avgProgress: activeGoals.length
-      ? Math.round(activeGoals.reduce((a, g) => a + calculateProgress(g.currentValue, g.targetValue), 0) / activeGoals.length)
+      ? Math.round(
+          activeGoals.reduce(
+            (a, g) => a + calculateProgress(g.currentValue, g.targetValue),
+            0
+          ) / activeGoals.length
+        )
       : 0,
     totalWorkouts: goals.reduce((a, g) => a + g._count.workoutLogs, 0),
     completed: completedGoals.length,
@@ -79,32 +130,24 @@ export function ProgressClient({
 
       {/* Overview Stats */}
       <div className="grid grid-cols-3 gap-3">
-        {[
-          { label: "Avg Progress", value: `${overallStats.avgProgress}%`, icon: TrendingUp },
-          { label: "Total Workouts", value: overallStats.totalWorkouts, icon: Target },
-          { label: "Goals Completed", value: overallStats.completed, icon: Calendar },
-        ].map(({ label, value, icon: Icon }) => (
-          <Card key={label}>
-            <CardContent className="p-4 flex items-center gap-3">
-              <Icon className="h-5 w-5 text-muted-foreground shrink-0" />
-              <div>
-                <p className="text-xs text-muted-foreground">{label}</p>
-                <p className="text-xl font-bold">{value}</p>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+        <StatCard label="Avg Progress" value={`${overallStats.avgProgress}%`} icon={TrendingUp} />
+        <StatCard label="Total Workouts" value={overallStats.totalWorkouts} icon={Target} />
+        <StatCard label="Goals Completed" value={overallStats.completed} icon={Calendar} />
       </div>
 
       {goals.length === 0 ? (
-        <div className="text-center py-16">
-          <TrendingUp className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
-          <h3 className="font-semibold text-lg mb-1">No progress data yet</h3>
-          <p className="text-sm text-muted-foreground mb-4">Create goals and log progress to see charts here</p>
-          <Link href="/goals">
-            <Badge variant="outline" className="cursor-pointer">Go to Goals →</Badge>
-          </Link>
-        </div>
+        <EmptyState
+          icon={TrendingUp}
+          title="No progress data yet"
+          description="Create goals and log progress to see charts here"
+          action={
+            <Link href="/goals">
+              <Badge variant="outline" className="cursor-pointer">
+                Go to Goals →
+              </Badge>
+            </Link>
+          }
+        />
       ) : (
         <div className="grid lg:grid-cols-3 gap-4">
           {/* Goal Selector + Chart */}
@@ -112,14 +155,12 @@ export function ProgressClient({
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <CardTitle className="text-base">Progress Chart</CardTitle>
-                <div className="flex gap-2">
-                  <Tabs value={chartType} onValueChange={(v) => setChartType(v as "line" | "bar")}>
-                    <TabsList className="h-7">
-                      <TabsTrigger value="line" className="text-xs px-2 h-6">Line</TabsTrigger>
-                      <TabsTrigger value="bar" className="text-xs px-2 h-6">Bar</TabsTrigger>
-                    </TabsList>
-                  </Tabs>
-                </div>
+                <Tabs value={chartType} onValueChange={(v) => setChartType(v as "line" | "bar")}>
+                  <TabsList className="h-7">
+                    <TabsTrigger value="line" className="text-xs px-2 h-6">Line</TabsTrigger>
+                    <TabsTrigger value="bar" className="text-xs px-2 h-6">Bar</TabsTrigger>
+                  </TabsList>
+                </Tabs>
               </div>
               {goals.length > 1 && (
                 <div className="flex flex-wrap gap-1.5 mt-2">
@@ -138,56 +179,30 @@ export function ProgressClient({
               {selectedGoal && (
                 <CardDescription className="mt-1">
                   {selectedGoal.currentValue} / {selectedGoal.targetValue} {selectedGoal.unit}
-                  {" "}· {calculateProgress(selectedGoal.currentValue, selectedGoal.targetValue)}% complete
+                  {" "}· {calculateProgress(selectedGoal.currentValue, selectedGoal.targetValue)}%
+                  complete
                 </CardDescription>
               )}
             </CardHeader>
             <CardContent>
               {chartData.length === 0 ? (
-                <div className="h-[220px] flex items-center justify-center">
-                  <div className="text-center">
+                <div className="h-[220px] flex items-center justify-center text-center">
+                  <div>
                     <p className="text-sm text-muted-foreground">No progress entries for this goal</p>
-                    <Link href={`/goals/${selectedGoalId}`} className="text-xs text-primary hover:underline mt-1 inline-block">
+                    <Link
+                      href={`/goals/${selectedGoalId}`}
+                      className="text-xs text-primary hover:underline mt-1 inline-block"
+                    >
                       Log progress →
                     </Link>
                   </div>
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height={220}>
-                  {chartType === "line" ? (
-                    <LineChart data={chartData} margin={{ top: 5, right: 10, bottom: 5, left: -20 }}>
-                      <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "hsl(var(--card))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: "6px",
-                          fontSize: "12px",
-                        }}
-                      />
-                      <Legend wrapperStyle={{ fontSize: "11px" }} />
-                      <Line type="monotone" dataKey="value" stroke="hsl(var(--chart-1))" strokeWidth={2} dot={{ r: 4 }} name="Progress" />
-                      <Line type="monotone" dataKey="target" stroke="hsl(var(--chart-2))" strokeDasharray="4 4" strokeWidth={1.5} dot={false} name="Target" />
-                    </LineChart>
-                  ) : (
-                    <BarChart data={chartData} margin={{ top: 5, right: 10, bottom: 5, left: -20 }}>
-                      <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "hsl(var(--card))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: "6px",
-                          fontSize: "12px",
-                        }}
-                      />
-                      <Bar dataKey="value" fill="hsl(var(--chart-1))" radius={[4, 4, 0, 0]} name="Progress" />
-                    </BarChart>
-                  )}
-                </ResponsiveContainer>
+                <DynamicProgressChart
+                  data={chartData}
+                  chartType={chartType}
+                  targetValue={selectedGoal?.targetValue ?? 0}
+                />
               )}
             </CardContent>
           </Card>
@@ -198,26 +213,18 @@ export function ProgressClient({
               <CardTitle className="text-base">All Goals</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {goals.map((g) => {
-                const pct = calculateProgress(g.currentValue, g.targetValue);
-                return (
-                  <div key={g.id} className="space-y-1 cursor-pointer" onClick={() => setSelectedGoalId(g.id)}>
-                    <div className="flex items-center justify-between">
-                      <p className="text-sm font-medium truncate pr-1">{g.title}</p>
-                      <span className="text-xs text-muted-foreground shrink-0">{pct}%</span>
-                    </div>
-                    <Progress value={pct} className="h-1.5" />
-                    <div className="flex items-center justify-between">
-                      <Badge variant="secondary" className={`text-xs px-1.5 py-0 ${GOAL_TYPE_COLORS[g.type]}`}>
-                        {GOAL_TYPE_LABELS[g.type]}
-                      </Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {g.currentValue}/{g.targetValue} {g.unit}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
+              {goals.map((g) => (
+                <GoalProgressCard
+                  key={g.id}
+                  id={g.id}
+                  title={g.title}
+                  type={g.type}
+                  currentValue={g.currentValue}
+                  targetValue={g.targetValue}
+                  unit={g.unit}
+                  onClick={() => setSelectedGoalId(g.id)}
+                />
+              ))}
             </CardContent>
           </Card>
         </div>
@@ -232,14 +239,21 @@ export function ProgressClient({
           <CardContent>
             <div className="space-y-2">
               {recentEntries.map((entry) => (
-                <div key={entry.id} className="flex items-center justify-between py-2 border-b last:border-0">
+                <div
+                  key={entry.id}
+                  className="flex items-center justify-between py-2 border-b last:border-0"
+                >
                   <div>
                     <p className="text-sm font-medium">{entry.goal.title}</p>
                     <p className="text-xs text-muted-foreground">{entry.notes || "No notes"}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-semibold">{entry.value} {entry.goal.unit}</p>
-                    <p className="text-xs text-muted-foreground">{formatRelativeDate(entry.recordedAt)}</p>
+                    <p className="text-sm font-semibold">
+                      {entry.value} {entry.goal.unit}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatRelativeDate(entry.recordedAt)}
+                    </p>
                   </div>
                 </div>
               ))}

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ArrowLeft, Plus, TrendingUp, Dumbbell } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,10 +13,49 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
-} from "recharts";
+import { chartTooltipStyle } from "@/components/ui/chart-tooltip";
+import { SkeletonChart } from "@/components/ui/skeleton-card";
 import { calculateProgress, formatDate, formatRelativeDate, GOAL_TYPE_LABELS, GOAL_TYPE_COLORS } from "@/lib/utils";
+import { useLogProgress } from "@/hooks/use-progress";
+
+// Dynamic import for Recharts
+const DynamicLineChart = dynamic(
+  () => import("recharts").then((m) => {
+    const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } = m;
+    return function GoalLineChart({
+      data,
+      targetValue,
+    }: {
+      data: { date: string; value: number; target: number }[];
+      targetValue: number;
+    }) {
+      return (
+        <ResponsiveContainer width="100%" height={220}>
+          <LineChart data={data} margin={{ top: 5, right: 10, bottom: 5, left: -20 }}>
+            <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+            <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip contentStyle={chartTooltipStyle} />
+            <ReferenceLine
+              y={targetValue}
+              stroke="hsl(var(--chart-2))"
+              strokeDasharray="4 4"
+              label={{ value: "Target", fontSize: 11 }}
+            />
+            <Line
+              type="monotone"
+              dataKey="value"
+              stroke="hsl(var(--chart-1))"
+              strokeWidth={2}
+              dot={{ r: 4 }}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      );
+    };
+  }),
+  { ssr: false, loading: () => <SkeletonChart /> }
+);
 
 interface ProgressEntry {
   id: string;
@@ -57,40 +97,41 @@ export function GoalDetailClient({ goal: initialGoal }: { goal: GoalDetail }) {
   const [progressOpen, setProgressOpen] = useState(false);
   const [progressValue, setProgressValue] = useState("");
   const [progressNotes, setProgressNotes] = useState("");
-  const [isLogging, setIsLogging] = useState(false);
+
+  const logProgress = useLogProgress();
 
   const pct = calculateProgress(goal.currentValue, goal.targetValue);
 
   const chartData = goal.progressEntries.map((e) => ({
-    date: new Date(e.recordedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    date: new Date(e.recordedAt).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    }),
     value: e.value,
     target: goal.targetValue,
   }));
 
-  const logProgress = async () => {
+  const handleLogProgress = async () => {
     if (!progressValue) return;
-    setIsLogging(true);
-    const res = await fetch("/api/progress", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ goalId: goal.id, value: parseFloat(progressValue), notes: progressNotes }),
+    const entry = await logProgress.mutateAsync({
+      goalId: goal.id,
+      value: parseFloat(progressValue),
+      notes: progressNotes || undefined,
     });
-    if (res.ok) {
-      const entry = await res.json();
-      setGoal((prev) => ({
-        ...prev,
-        currentValue: parseFloat(progressValue),
-        progressEntries: [...prev.progressEntries, entry],
-      }));
-      setProgressValue("");
-      setProgressNotes("");
-      setProgressOpen(false);
-    }
-    setIsLogging(false);
+    setGoal((prev) => ({
+      ...prev,
+      currentValue: parseFloat(progressValue),
+      progressEntries: [...prev.progressEntries, entry],
+    }));
+    setProgressValue("");
+    setProgressNotes("");
+    setProgressOpen(false);
+    router.refresh();
   };
 
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-4xl mx-auto">
+      {/* Header */}
       <div className="flex items-center gap-3">
         <Link href="/goals">
           <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -104,7 +145,9 @@ export function GoalDetailClient({ goal: initialGoal }: { goal: GoalDetail }) {
               {GOAL_TYPE_LABELS[goal.type]}
             </Badge>
           </div>
-          {goal.description && <p className="text-sm text-muted-foreground mt-0.5">{goal.description}</p>}
+          {goal.description && (
+            <p className="text-sm text-muted-foreground mt-0.5">{goal.description}</p>
+          )}
         </div>
         <Button size="sm" onClick={() => setProgressOpen(true)}>
           <Plus className="h-4 w-4 mr-1" /> Log Progress
@@ -117,9 +160,12 @@ export function GoalDetailClient({ goal: initialGoal }: { goal: GoalDetail }) {
           <div className="flex items-end justify-between mb-3">
             <div>
               <p className="text-3xl font-bold">
-                {goal.currentValue} <span className="text-lg text-muted-foreground font-normal">{goal.unit}</span>
+                {goal.currentValue}{" "}
+                <span className="text-lg text-muted-foreground font-normal">{goal.unit}</span>
               </p>
-              <p className="text-sm text-muted-foreground">of {goal.targetValue} {goal.unit} target</p>
+              <p className="text-sm text-muted-foreground">
+                of {goal.targetValue} {goal.unit} target
+              </p>
             </div>
             <div className="text-right">
               <p className="text-2xl font-bold">{pct}%</p>
@@ -144,23 +190,7 @@ export function GoalDetailClient({ goal: initialGoal }: { goal: GoalDetail }) {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={chartData} margin={{ top: 5, right: 10, bottom: 5, left: -20 }}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "hsl(var(--card))",
-                    border: "1px solid hsl(var(--border))",
-                    borderRadius: "6px",
-                    fontSize: "12px",
-                  }}
-                />
-                <ReferenceLine y={goal.targetValue} stroke="hsl(var(--chart-2))" strokeDasharray="4 4" label={{ value: "Target", fontSize: 11 }} />
-                <Line type="monotone" dataKey="value" stroke="hsl(var(--chart-1))" strokeWidth={2} dot={{ r: 4 }} />
-              </LineChart>
-            </ResponsiveContainer>
+            <DynamicLineChart data={chartData} targetValue={goal.targetValue} />
           </CardContent>
         </Card>
       )}
@@ -179,15 +209,26 @@ export function GoalDetailClient({ goal: initialGoal }: { goal: GoalDetail }) {
         </CardHeader>
         <CardContent>
           {goal.workoutLogs.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-4">No workouts logged for this goal yet</p>
+            <p className="text-sm text-muted-foreground text-center py-4">
+              No workouts logged for this goal yet
+            </p>
           ) : (
             <div className="space-y-2">
               {goal.workoutLogs.map((w) => (
-                <div key={w.id} className="flex items-center justify-between py-2 border-b last:border-0 text-sm">
+                <div
+                  key={w.id}
+                  className="flex items-center justify-between py-2 border-b last:border-0 text-sm"
+                >
                   <div>
                     <p className="font-medium">{w.exerciseName}</p>
                     <p className="text-xs text-muted-foreground">
-                      {[w.sets && `${w.sets} sets`, w.reps && `${w.reps} reps`, w.weight && `${w.weight}kg`].filter(Boolean).join(" · ")}
+                      {[
+                        w.sets && `${w.sets} sets`,
+                        w.reps && `${w.reps} reps`,
+                        w.weight && `${w.weight}kg`,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </p>
                   </div>
                   <div className="text-right text-xs text-muted-foreground">
@@ -229,8 +270,13 @@ export function GoalDetailClient({ goal: initialGoal }: { goal: GoalDetail }) {
               />
             </div>
             <div className="flex gap-2 justify-end">
-              <Button variant="outline" onClick={() => setProgressOpen(false)}>Cancel</Button>
-              <Button onClick={logProgress} disabled={!progressValue || isLogging}>
+              <Button variant="outline" onClick={() => setProgressOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleLogProgress}
+                disabled={!progressValue || logProgress.isPending}
+              >
                 Save
               </Button>
             </div>

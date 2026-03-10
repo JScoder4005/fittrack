@@ -9,6 +9,8 @@ import {
   TrendingUp,
   LogOut,
   Activity,
+  Scale,
+  Trophy,
 } from "lucide-react";
 import { signOut } from "next-auth/react";
 import { cn } from "@/lib/utils";
@@ -21,6 +23,8 @@ const navItems = [
   { href: "/goals", label: "Goals", icon: Target },
   { href: "/workouts", label: "Workouts", icon: Dumbbell },
   { href: "/progress", label: "Progress", icon: TrendingUp },
+  { href: "/bmi", label: "BMI Tracker", icon: Scale },
+  { href: "/personal-bests", label: "Personal Bests", icon: Trophy },
 ];
 
 export function Sidebar() {

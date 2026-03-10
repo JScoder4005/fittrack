@@ -22,6 +22,7 @@ model User {
   goals           Goal[]
   workoutLogs     WorkoutLog[]
   progressEntries ProgressEntry[]
+  bodyStats       BodyStat[]
 
   @@map("users")
 }
@@ -139,4 +140,18 @@ model ProgressEntry {
   goal Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
 
   @@map("progress_entries")
+}
+
+model BodyStat {
+  id         String   @id @default(cuid())
+  userId     String
+  weight     Float
+  height     Float?
+  bodyFat    Float?
+  recordedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("body_stats")
 }
